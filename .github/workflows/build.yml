@@ -1,5 +1,5 @@
 name: override_music
-description: A lightweight AMOLED-optimized music app with YouTube streaming and local file playback.
+description: A lightweight AMOLED-optimized music app.
 publish_to: 'none'
 version: 1.0.0+1
 
