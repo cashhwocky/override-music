@@ -197,6 +197,13 @@ class _MainContainerState extends State<MainContainer> {
     await prefs.setString('recent_songs', encoded);
   }
 
+  void clearRecentHistory() {
+    setState(() {
+      _recentSongs.clear();
+    });
+    _saveRecentSongs();
+  }
+
   Future<void> _scanLocalFiles() async {
     setState(() => _isScanningLocal = true);
     try {
@@ -589,10 +596,7 @@ class SettingsScreen extends StatelessWidget {
               title: const Text('Clear Recently Played History', style: TextStyle(color: Colors.white)),
               trailing: const Icon(Icons.delete_outline, color: Colors.redAccent),
               onTap: () {
-                parent.setState(() {
-                  parent._recentSongs.clear();
-                });
-                parent._saveRecentSongs();
+                parent.clearRecentHistory();
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('History cleared')),
                 );
