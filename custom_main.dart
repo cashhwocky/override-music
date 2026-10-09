@@ -73,7 +73,6 @@ class Song {
 class MainContainer extends StatefulWidget {
   const MainContainer({super.key});
 
-  @const
   @override
   State<MainContainer> createState() => _MainContainerState();
 }
@@ -162,7 +161,6 @@ class _MainContainerState extends State<MainContainer> {
     });
 
     try {
-      // Bypass 403 blocks explicitly utilizing the Android VR client stream manifest
       var manifest = await _yt!.videos.streamsClient.getManifest(
         song.videoId,
         ytClients: [YoutubeApiClient.androidVr, YoutubeApiClient.safari],
@@ -229,7 +227,7 @@ class _MainContainerState extends State<MainContainer> {
       isScrollControlled: true,
       backgroundColor: Colors.black,
       builder: (context) => FullPlayerSheet(
-        player: this,
+        parent: this,
       ),
     );
   }
