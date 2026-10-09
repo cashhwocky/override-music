@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt_explode;
@@ -267,7 +266,6 @@ class _MainContainerState extends State<MainContainer> {
     _saveLikedSongs();
   }
 
-  // Direct YouTube Explode Stream Resolution (Same core engine as Harmony Music)
   Future<void> _playSong(Song song, {List<Song>? newQueue, int index = 0}) async {
     setState(() {
       _currentSong = song;
@@ -303,7 +301,7 @@ class _MainContainerState extends State<MainContainer> {
           _isLoadingTrack = false;
         });
       }
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
         setState(() {
           _isLoadingTrack = false;
@@ -313,7 +311,6 @@ class _MainContainerState extends State<MainContainer> {
     }
   }
 
-  // Direct YouTube Explode Search (No dead proxy servers)
   Future<void> _searchMusic(String query) async {
     if (query.trim().isEmpty) return;
     setState(() {
