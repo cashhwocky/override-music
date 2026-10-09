@@ -27,6 +27,7 @@ jobs:
         run: |
           flutter pub add youtube_explode_dart
           flutter pub add just_audio
+          flutter pub add shared_preferences
 
       - name: Inject Android Permissions & SDK Level
         run: |
