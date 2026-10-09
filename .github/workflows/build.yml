@@ -1,4 +1,4 @@
-name: Override Music 
+name: Build Override Music APK
 
 on:
   push:
@@ -27,6 +27,12 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Scaffold Standard Project Structure
+        run: |
+          flutter create . --project-name override_music --platforms=android
+          mkdir -p lib
+          cp custom_main.dart lib/main.dart
+
       - name: Install dependencies
         run: flutter pub get
 
@@ -34,7 +40,7 @@ jobs:
         run: flutter analyze
 
       - name: Build APK
-        run: flutter build apk --release -t custom_main.dart
+        run: flutter build apk --release
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
