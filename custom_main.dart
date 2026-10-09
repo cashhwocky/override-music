@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt_explode;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,10 +35,10 @@ class _OverrideMusicAppState extends State<OverrideMusicApp> {
 
   final Map<String, Color> themes = {
     'black': Colors.black,
-    'indigo': Color(0xFF181C32), // Google Pixel 10 Indigo subtle tint
-    'red': Color(0xFF241212),    // Subtle Red
-    'green': Color(0xFF112214),  // Subtle Green
-    'blue': Color(0xFF111928),   // Subtle Blue
+    'indigo': const Color(0xFF181C32), // Google Pixel 10 Indigo subtle tint
+    'red': const Color(0xFF241212),    // Subtle Red
+    'green': const Color(0xFF112214),  // Subtle Green
+    'blue': const Color(0xFF111928),   // Subtle Blue
   };
 
   @override
@@ -266,6 +267,7 @@ class _MainContainerState extends State<MainContainer> {
     _saveLikedSongs();
   }
 
+  // Direct YouTube Explode Stream Resolution (Same core engine as Harmony Music)
   Future<void> _playSong(Song song, {List<Song>? newQueue, int index = 0}) async {
     setState(() {
       _currentSong = song;
@@ -287,50 +289,21 @@ class _MainContainerState extends State<MainContainer> {
         return;
       }
 
-      // InnerTune & Piped Gateway Routing
-      final response = await http.get(
-        Uri.parse('https://pipedapi.kavin.rocks/streams/${song.videoId}'),
-      ).timeout(const Duration(seconds: 10));
+      var yt = yt_explode.YoutubeExplode();
+      var manifest = await yt.videos.streamsClient.getManifest(song.videoId);
+      var audioStream = manifest.audioOnly.withHighestBitrate();
+      var audioUrl = audioStream.url.toString();
+      yt.close();
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final audioStreams = data['audioStreams'] as List;
-        
-        var bestStream = audioStreams.isNotEmpty ? audioStreams[0] : null;
-        for (var stream in audioStreams) {
-          if ((stream['bitrate'] ?? 0) > (bestStream['bitrate'] ?? 0)) {
-            bestStream = stream;
-          }
-        }
+      await _audioPlayer.setUrl(audioUrl);
+      await _audioPlayer.play();
 
-        if (bestStream != null && bestStream['url'] != null) {
-          await _audioPlayer.setUrl(bestStream['url']);
-          await _audioPlayer.play();
-          if (mounted) setState(() => _isLoadingTrack = false);
-          return;
-        }
+      if (mounted) {
+        setState(() {
+          _isLoadingTrack = false;
+        });
       }
-      throw Exception('Stream link unavailable');
-    } catch (_) {
-      try {
-        final fallbackRes = await http.get(
-          Uri.parse('https://vid.puffyan.us/api/v1/videos/${song.videoId}'),
-        ).timeout(const Duration(seconds: 10));
-        
-        if (fallbackRes.statusCode == 200) {
-          final data = jsonDecode(fallbackRes.body);
-          final adaptive = data['adaptiveStreams'] as List;
-          final audio = adaptive.firstWhere((s) => s['type'].toString().contains('audio'));
-          
-          if (audio != null && audio['url'] != null) {
-            await _audioPlayer.setUrl(audio['url']);
-            await _audioPlayer.play();
-            if (mounted) setState(() => _isLoadingTrack = false);
-            return;
-          }
-        }
-      } catch (__) {}
-
+    } catch (e) {
       if (mounted) {
         setState(() {
           _isLoadingTrack = false;
@@ -340,6 +313,7 @@ class _MainContainerState extends State<MainContainer> {
     }
   }
 
+  // Direct YouTube Explode Search (No dead proxy servers)
   Future<void> _searchMusic(String query) async {
     if (query.trim().isEmpty) return;
     setState(() {
@@ -348,52 +322,19 @@ class _MainContainerState extends State<MainContainer> {
     });
 
     List<Song> results = [];
-    
+    var yt = yt_explode.YoutubeExplode();
     try {
-      final response = await http.get(
-        Uri.parse('https://pipedapi.kavin.rocks/search?q=${Uri.encodeComponent(query)}&filter=videos'),
-      ).timeout(const Duration(seconds: 8));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final items = data['items'] as List;
-        for (var item in items) {
-          if (item['type'] == 'stream') {
-            String url = item['url'] ?? '';
-            String videoId = url.replaceAll('/watch?v=', '');
-            results.add(Song(
-              videoId: videoId,
-              title: item['title'] ?? 'Unknown Title',
-              author: item['uploaderName'] ?? 'Unknown Artist',
-              thumbnailUrl: 'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
-            ));
-          }
-        }
+      var searchResults = await yt.search.search(query);
+      for (var video in searchResults) {
+        results.add(Song(
+          videoId: video.id.value,
+          title: video.title,
+          author: video.author,
+          thumbnailUrl: video.thumbnails.highResUrl,
+        ));
       }
     } catch (_) {}
-
-    if (results.isEmpty) {
-      try {
-        final backupRes = await http.get(
-          Uri.parse('https://vid.puffyan.us/api/v1/search?q=${Uri.encodeComponent(query)}&type=video'),
-        ).timeout(const Duration(seconds: 8));
-
-        if (backupRes.statusCode == 200) {
-          final List data = jsonDecode(backupRes.body);
-          for (var item in data) {
-            if (item['type'] == 'video') {
-              String videoId = item['videoId'];
-              results.add(Song(
-                videoId: videoId,
-                title: item['title'] ?? 'Unknown Title',
-                author: item['author'] ?? 'Unknown Artist',
-                thumbnailUrl: 'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
-              ));
-            }
-          }
-        }
-      } catch (_) {}
-    }
+    yt.close();
 
     if (mounted) {
       setState(() {
@@ -643,7 +584,7 @@ class SettingsScreen extends StatelessWidget {
             ),
             const ListTile(
               title: Text('Routing Engine', style: TextStyle(color: Colors.white)),
-              trailing: Text('Innertune / Piped API', style: TextStyle(color: Colors.white54)),
+              trailing: Text('Harmony / YoutubeExplode', style: TextStyle(color: Colors.white54)),
             ),
             const Divider(color: Colors.white24),
             const Text('Data & Storage', style: TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
@@ -925,7 +866,7 @@ class FullPlayerSheet extends StatelessWidget {
                         parent._playSong(parent._queue[newIndex], newQueue: parent._queue, index: newIndex);
                       }
                     : null,
-                ),
+              ),
             ],
           ),
           const SizedBox(height: 40),
