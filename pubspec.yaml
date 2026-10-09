@@ -1,5 +1,5 @@
 name: override_music
-description: A lightweight AMOLED-optimized music app with YouTube streaming and local file playback.
+description: A multi-featured music application and entertainment hub.
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -11,8 +11,10 @@ dependencies:
     sdk: flutter
   http: ^1.2.0
   just_audio: ^0.9.36
+  just_audio_background: ^0.0.1-beta.13
   shared_preferences: ^2.2.2
   youtube_explode_dart: ^2.0.0
+  file_picker: ^8.0.0
 
 dev_dependencies:
   flutter_test:
