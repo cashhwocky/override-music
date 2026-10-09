@@ -32,6 +32,7 @@ jobs:
           flutter create . --project-name override_music --platforms=android
           mkdir -p lib
           cp custom_main.dart lib/main.dart
+          rm -rf test
 
       - name: Install dependencies
         run: flutter pub get
