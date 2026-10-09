@@ -94,6 +94,9 @@ class _MainContainerState extends State<MainContainer> {
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
 
+  // Highly reliable public Piped API instance endpoint
+  static const String _apiBase = 'https://pipedapi.kavin.rocks';
+
   @override
   void initState() {
     super.initState();
@@ -158,22 +161,27 @@ class _MainContainerState extends State<MainContainer> {
     });
 
     try {
-      // Query Invidious API instance for direct, unblocked audio stream URLs
-      final response = await http.get(Uri.parse('https://vid.puffyan.us/api/v1/videos/${song.videoId}'));
+      final response = await http
+          .get(Uri.parse('$_apiBase/streams/${song.videoId}'))
+          .timeout(const Duration(seconds: 8));
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final adaptiveStreams = data['adaptiveStreams'] as List;
+        final audioStreams = data['audioStreams'] as List;
         
-        var audioStream = adaptiveStreams.firstWhere(
-          (s) => s['type'].toString().contains('audio'),
-          orElse: () => adaptiveStreams.isNotEmpty ? adaptiveStreams[0] : null,
-        );
+        // Find best audio-only stream URL provided by Piped backend
+        var bestStream = audioStreams.isNotEmpty ? audioStreams[0] : null;
+        for (var stream in audioStreams) {
+          if ((stream['bitrate'] ?? 0) > (bestStream['bitrate'] ?? 0)) {
+            bestStream = stream;
+          }
+        }
 
-        if (audioStream == null || audioStream['url'] == null) {
+        if (bestStream == null || bestStream['url'] == null) {
           throw Exception('Stream URL not found');
         }
 
-        String streamUrl = audioStream['url'];
+        String streamUrl = bestStream['url'];
         await _audioPlayer.setUrl(streamUrl);
         await _audioPlayer.play();
 
@@ -189,7 +197,7 @@ class _MainContainerState extends State<MainContainer> {
       if (mounted) {
         setState(() {
           _isLoadingTrack = false;
-          _errorMessage = "Could not load track. Tap play to retry.";
+          _errorMessage = "Could not load track. Tap to retry.";
         });
       }
     }
@@ -203,18 +211,23 @@ class _MainContainerState extends State<MainContainer> {
     });
 
     try {
-      final response = await http.get(Uri.parse('https://vid.puffyan.us/api/v1/search?q=${Uri.encodeComponent(query)}&type=video'));
+      final response = await http
+          .get(Uri.parse('$_apiBase/search?q=${Uri.encodeComponent(query)}&filter=videos'))
+          .timeout(const Duration(seconds: 8));
+
       if (response.statusCode == 200) {
-        final List data = jsonDecode(response.body);
+        final data = jsonDecode(response.body);
+        final items = data['items'] as List;
         List<Song> results = [];
-        for (var item in data) {
-          if (item['type'] == 'video') {
-            String videoId = item['videoId'];
+        for (var item in items) {
+          if (item['type'] == 'stream') {
+            String url = item['url'] ?? '';
+            String videoId = url.replaceAll('/watch?v=', '');
             results.add(Song(
               videoId: videoId,
               title: item['title'] ?? 'Unknown Title',
-              author: item['author'] ?? 'Unknown Artist',
-              thumbnailUrl: 'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
+              author: item['uploaderName'] ?? 'Unknown Artist',
+              thumbnailUrl: item['thumbnail'] ?? 'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
             ));
           }
         }
@@ -225,9 +238,7 @@ class _MainContainerState extends State<MainContainer> {
           });
         }
       } else {
-        setState(() {
-          _isSearching = false;
-        });
+        if (mounted) setState(() => _isSearching = false);
       }
     } catch (e) {
       if (mounted) {
