@@ -34,6 +34,16 @@ jobs:
           cp custom_main.dart lib/main.dart
           rm -rf test
 
+      - name: Configure Android Manifest Permissions
+        run: |
+          MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
+          
+          # Inject background execution permissions and storage accessibility rules
+          sed -i '/<manifest/a \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>' $MANIFEST_PATH
+          
+          # Inject background audio handling components required by OS engines
+          sed -i '/<activity/i \        <service android:name="com.ryanheise.audioservice.AudioService" android:exported="true" android:foregroundServiceType="mediaPlayback">\n            <intent-filter>\n                <action android:name="android.intent.action.MEDIA_BUTTON" />\n            </intent-filter>\n        </service>\n' $MANIFEST_PATH
+
       - name: Install dependencies
         run: flutter pub get
 
