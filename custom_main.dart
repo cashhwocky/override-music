@@ -95,7 +95,11 @@ class _MainContainerState extends State<MainContainer> {
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
 
-  static const String _apiBase = 'https://pipedapi.kavin.rocks';
+  static const List<String> _apiMirrors = [
+    'https://pipedapi.kavin.rocks',
+    'https://pipedapi.tokhmi.xyz',
+    'https://piped-api.garudalinux.org',
+  ];
 
   @override
   void initState() {
@@ -185,45 +189,44 @@ class _MainContainerState extends State<MainContainer> {
 
     _addToRecents(song);
 
-    try {
-      final response = await http
-          .get(Uri.parse('$_apiBase/streams/${song.videoId}'))
-          .timeout(const Duration(seconds: 6));
+    bool played = false;
+    for (String base in _apiMirrors) {
+      try {
+        final response = await http
+            .get(Uri.parse('$base/streams/${song.videoId}'))
+            .timeout(const Duration(seconds: 10));
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final audioStreams = data['audioStreams'] as List;
-        
-        var bestStream = audioStreams.isNotEmpty ? audioStreams[0] : null;
-        for (var stream in audioStreams) {
-          if ((stream['bitrate'] ?? 0) > (bestStream['bitrate'] ?? 0)) {
-            bestStream = stream;
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final audioStreams = data['audioStreams'] as List;
+          
+          var bestStream = audioStreams.isNotEmpty ? audioStreams[0] : null;
+          for (var stream in audioStreams) {
+            if ((stream['bitrate'] ?? 0) > (bestStream['bitrate'] ?? 0)) {
+              bestStream = stream;
+            }
+          }
+
+          if (bestStream != null && bestStream['url'] != null) {
+            String streamUrl = bestStream['url'];
+            await _audioPlayer.setUrl(streamUrl);
+            await _audioPlayer.play();
+            played = true;
+            break;
           }
         }
-
-        if (bestStream == null || bestStream['url'] == null) {
-          throw Exception('Stream URL not found');
-        }
-
-        String streamUrl = bestStream['url'];
-        await _audioPlayer.setUrl(streamUrl);
-        await _audioPlayer.play();
-
-        if (mounted) {
-          setState(() {
-            _isLoadingTrack = false;
-          });
-        }
-      } else {
-        throw Exception('Failed to resolve stream');
+      } catch (_) {
+        continue;
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isLoadingTrack = false;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isLoadingTrack = false;
+        if (!played) {
           _errorMessage = "Could not load track. Tap to retry.";
-        });
-      }
+        }
+      });
     }
   }
 
@@ -234,42 +237,40 @@ class _MainContainerState extends State<MainContainer> {
       _searchResults = [];
     });
 
-    try {
-      final response = await http
-          .get(Uri.parse('$_apiBase/search?q=${Uri.encodeComponent(query)}&filter=videos'))
-          .timeout(const Duration(seconds: 6));
+    List<Song> results = [];
+    for (String base in _apiMirrors) {
+      try {
+        final response = await http
+            .get(Uri.parse('$base/search?q=${Uri.encodeComponent(query)}&filter=videos'))
+            .timeout(const Duration(seconds: 12));
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final items = data['items'] as List;
-        List<Song> results = [];
-        for (var item in items) {
-          if (item['type'] == 'stream') {
-            String url = item['url'] ?? '';
-            String videoId = url.replaceAll('/watch?v=', '');
-            results.add(Song(
-              videoId: videoId,
-              title: item['title'] ?? 'Unknown Title',
-              author: item['uploaderName'] ?? 'Unknown Artist',
-              thumbnailUrl: item['thumbnail'] ?? 'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
-            ));
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final items = data['items'] as List;
+          for (var item in items) {
+            if (item['type'] == 'stream') {
+              String url = item['url'] ?? '';
+              String videoId = url.replaceAll('/watch?v=', '');
+              results.add(Song(
+                videoId: videoId,
+                title: item['title'] ?? 'Unknown Title',
+                author: item['uploaderName'] ?? 'Unknown Artist',
+                thumbnailUrl: item['thumbnail'] ?? 'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
+              ));
+            }
           }
+          if (results.isNotEmpty) break;
         }
-        if (mounted) {
-          setState(() {
-            _searchResults = results;
-            _isSearching = false;
-          });
-        }
-      } else {
-        if (mounted) setState(() => _isSearching = false);
+      } catch (_) {
+        continue;
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isSearching = false;
-        });
-      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _searchResults = results;
+        _isSearching = false;
+      });
     }
   }
 
