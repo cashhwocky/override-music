@@ -1,44 +1,23 @@
-name: Build Override Music APK
+name: override_music
+description: A lightweight AMOLED-optimized music app with YouTube streaming and local file playback.
+publish_to: 'none'
+version: 1.0.0+1
 
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
+environment:
+  sdk: '>=3.0.0 <4.0.0'
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  just_audio: ^0.9.36
+  shared_preferences: ^2.2.2
+  youtube_explode_dart: ^2.0.0
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
 
-      - name: Generate Flutter Boilerplate (Cloud Only)
-        run: flutter create --project-name override_music --org com.alex.overridemusic .
-
-      - name: Inject Custom Code
-        run: cp custom_main.dart lib/main.dart
-
-      - name: Add Required Dependencies
-        run: |
-          flutter pub add youtube_explode_dart
-          flutter pub add just_audio
-          flutter pub add shared_preferences
-
-      - name: Inject Android Permissions & SDK Level
-        run: |
-          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"/>' android/app/src/main/AndroidManifest.xml
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle.kts
-
-      - name: Build APK
-        run: flutter build apk --release --no-tree-shake-icons
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: override-music-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+flutter:
+  uses-material-design: true
