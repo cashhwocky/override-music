@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt_explode;
@@ -326,19 +327,30 @@ class _MainContainerState extends State<MainContainer> {
     });
 
     List<Song> results = [];
-    var yt = yt_explode.YoutubeExplode();
     try {
-      var searchResults = await yt.search.search(query);
-      for (var video in searchResults) {
-        results.add(Song(
-          videoId: video.id.value,
-          title: video.title,
-          author: video.author,
-          thumbnailUrl: video.thumbnails.highResUrl,
-        ));
+      final response = await http.get(
+        Uri.parse('https://pipedapi.kavin.rocks/search?q=${Uri.encodeComponent(query)}&filter=videos'),
+      );
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final items = data['items'] as List?;
+        if (items != null) {
+          for (var item in items) {
+            String url = item['url'] ?? '';
+            String videoId = url.contains('?v=') ? url.split('?v=').last : '';
+            if (videoId.isNotEmpty) {
+              results.add(Song(
+                videoId: videoId,
+                title: item['title'] ?? 'Unknown Title',
+                author: item['uploaderName'] ?? 'Unknown Artist',
+                thumbnailUrl: item['thumbnail'] ?? '',
+              ));
+            }
+          }
+        }
       }
     } catch (_) {}
-    yt.close();
 
     if (mounted) {
       setState(() {
@@ -372,6 +384,7 @@ class _MainContainerState extends State<MainContainer> {
               SearchTab(parent: this),
               LocalTab(parent: this),
               LibraryTab(parent: this),
+              const GamesTab(),
             ],
           ),
           if (_currentSong != null)
@@ -395,6 +408,7 @@ class _MainContainerState extends State<MainContainer> {
           BottomNavigationBarItem(icon: Icon(Icons.search), label: 'Search'),
           BottomNavigationBarItem(icon: Icon(Icons.folder_open), label: 'Local'),
           BottomNavigationBarItem(icon: Icon(Icons.library_music), label: 'Library'),
+          BottomNavigationBarItem(icon: Icon(Icons.sports_esports), label: 'Games'),
         ],
       ),
     );
@@ -536,343 +550,95 @@ class LocalTab extends StatelessWidget {
   }
 }
 
-class SettingsScreen extends StatelessWidget {
-  final _MainContainerState parent;
-  const SettingsScreen({super.key, required this.parent});
+class GamesTab extends StatefulWidget {
+  const GamesTab({super.key});
+
+  @override
+  State<GamesTab> createState() => _GamesTabState();
+}
+
+class _GamesTabState extends State<GamesTab> {
+  List<String> _board = List.filled(9, '');
+  bool _xTurn = true;
+  String _winner = '';
+
+  void _tapped(int index) {
+    if (_board[index] != '' || _winner != '') return;
+    setState(() {
+      _board[index] = _xTurn ? 'X' : 'O';
+      _xTurn = !_xTurn;
+      _checkWinner();
+    });
+  }
+
+  void _checkWinner() {
+    const winConditions = [
+      [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
+      [0, 3, 6], [1, 4, 7], [2, 5, 8], // columns
+      [0, 4, 8], [2, 4, 6],           // diagonals
+    ];
+
+    for (var condition in winConditions) {
+      String a = _board[condition[0]];
+      String b = _board[condition[1]];
+      String c = _board[condition[2]];
+      if (a != '' && a == b && b == c) {
+        setState(() {
+          _winner = '$a Wins!';
+        });
+        return;
+      }
+    }
+
+    if (!_board.contains('') && _winner == '') {
+      setState(() {
+        _winner = 'It\'s a Draw!';
+      });
+    }
+  }
+
+  void _resetGame() {
+    setState(() {
+      _board = List.filled(9, '');
+      _xTurn = true;
+      _winner = '';
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final appState = OverrideMusicApp.of(context);
-    final currentKey = appState?._currentThemeKey ?? 'black';
-
-    return Scaffold(
-      backgroundColor: appState?.currentBackgroundColor ?? Colors.black,
-      appBar: AppBar(
-        title: const Text('Settings', style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: Padding(
+    return SafeArea(
+      child: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: ListView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            const Text('Appearance & Themes', style: TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
+            const Text(
+              'Mini Games',
+              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
             const SizedBox(height: 8),
-            ListTile(
-              title: const Text('Select Theme', style: TextStyle(color: Colors.white)),
-              subtitle: Text('Current: ${currentKey.toUpperCase()}', style: const TextStyle(color: Colors.white54)),
-              trailing: DropdownButton<String>(
-                value: currentKey,
-                dropdownColor: const Color(0xFF1E1E1E),
-                style: const TextStyle(color: Colors.white),
-                underline: const SizedBox(),
-                items: const [
-                  DropdownMenuItem(value: 'black', child: Text('Pure Black')),
-                  DropdownMenuItem(value: 'indigo', child: Text('Pixel 10 Indigo')),
-                  DropdownMenuItem(value: 'red', child: Text('Subtle Red')),
-                  DropdownMenuItem(value: 'green', child: Text('Subtle Green')),
-                  DropdownMenuItem(value: 'blue', child: Text('Subtle Blue')),
-                ],
-                onChanged: (String? val) {
-                  if (val != null) {
-                    appState?.setTheme(val);
-                  }
-                },
-              ),
-            ),
-            const Divider(color: Colors.white24),
-            const Text('App Info', style: TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
-            const ListTile(
-              title: Text('App Name', style: TextStyle(color: Colors.white)),
-              trailing: Text('Override Music', style: TextStyle(color: Colors.white54)),
-            ),
-            const ListTile(
-              title: Text('Routing Engine', style: TextStyle(color: Colors.white)),
-              trailing: Text('Harmony / YoutubeExplode', style: TextStyle(color: Colors.white54)),
-            ),
-            const Divider(color: Colors.white24),
-            const Text('Data & Storage', style: TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
-            ListTile(
-              title: const Text('Clear Recently Played History', style: TextStyle(color: Colors.white)),
-              trailing: const Icon(Icons.delete_outline, color: Colors.redAccent),
-              onTap: () {
-                parent.clearRecentHistory();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('History cleared')),
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class SearchTab extends StatelessWidget {
-  final _MainContainerState parent;
-  const SearchTab({super.key, required this.parent});
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
             const Text(
-              'Search',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white),
+              'Tic-Tac-Toe',
+              style: TextStyle(fontSize: 18, color: Colors.white54),
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: parent._searchController,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: 'Search artists, songs...',
-                hintStyle: const TextStyle(color: Colors.white54),
-                filled: true,
-                fillColor: const Color(0xFF121212),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.search, color: Colors.white),
-                  onPressed: () => parent._searchMusic(parent._searchController.text),
+            const SizedBox(height: 30),
+            Text(
+              _winner.isEmpty ? (_xTurn ? 'Turn: X' : 'Turn: O') : _winner,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: 300,
+              height: 300,
+              child: GridView.builder(
+                itemCount: 9,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 8,
+                  mainAxisSpacing: 8,
                 ),
-              ),
-              onSubmitted: (val) => parent._searchMusic(val),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: parent._isSearching
-                  ? const Center(child: CircularProgressIndicator(color: Colors.white))
-                  : ListView.builder(
-                      itemCount: parent._searchResults.length,
-                      itemBuilder: (context, index) {
-                        final song = parent._searchResults[index];
-                        return ListTile(
-                          leading: ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.network(song.thumbnailUrl, width: 50, height: 50, fit: BoxFit.cover,
-                              errorBuilder: (c, e, s) => Container(width: 50, height: 50, color: Colors.white24),
-                            ),
-                          ),
-                          title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white)),
-                          subtitle: Text(song.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54)),
-                          onTap: () => parent._playSong(song, newQueue: parent._searchResults, index: index),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class LibraryTab extends StatelessWidget {
-  final _MainContainerState parent;
-  const LibraryTab({super.key, required this.parent});
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Liked Songs',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: parent._likedSongs.isEmpty
-                  ? const Center(child: Text('No liked songs yet.', style: TextStyle(color: Colors.white54)))
-                  : ListView.builder(
-                      itemCount: parent._likedSongs.length,
-                      itemBuilder: (context, index) {
-                        final song = parent._likedSongs[index];
-                        return ListTile(
-                          leading: ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: song.thumbnailUrl.isNotEmpty
-                                ? Image.network(song.thumbnailUrl, width: 50, height: 50, fit: BoxFit.cover,
-                                    errorBuilder: (c, e, s) => Container(width: 50, height: 50, color: Colors.white24))
-                                : Container(width: 50, height: 50, color: Colors.white24, child: const Icon(Icons.music_note)),
-                          ),
-                          title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white)),
-                          subtitle: Text(song.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54)),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.favorite, color: Colors.white),
-                            onPressed: () => parent._toggleLike(song),
-                          ),
-                          onTap: () => parent._playSong(song, newQueue: parent._likedSongs, index: index),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class MiniPlayer extends StatelessWidget {
-  final _MainContainerState parent;
-  const MiniPlayer({super.key, required this.parent});
-
-  @override
-  Widget build(BuildContext context) {
-    final song = parent._currentSong!;
-    return GestureDetector(
-      onTap: parent._openNowPlaying,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1E1E1E),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: song.thumbnailUrl.isNotEmpty
-                  ? Image.network(song.thumbnailUrl, width: 45, height: 45, fit: BoxFit.cover,
-                      errorBuilder: (c, e, s) => Container(width: 45, height: 45, color: Colors.white24))
-                  : Container(width: 45, height: 45, color: Colors.white24, child: const Icon(Icons.music_note, size: 20)),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  Text(song.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                ],
-              ),
-            ),
-            IconButton(
-              icon: Icon(parent._isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white),
-              onPressed: () {
-                if (parent._isPlaying) {
-                  parent._audioPlayer.pause();
-                } else {
-                  parent._audioPlayer.play();
-                }
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class FullPlayerSheet extends StatelessWidget {
-  final _MainContainerState parent;
-  const FullPlayerSheet({super.key, required this.parent});
-
-  @override
-  Widget build(BuildContext context) {
-    final song = parent._currentSong!;
-    final isLiked = parent._isLiked(song);
-    final bgColor = OverrideMusicApp.of(context)?.currentBackgroundColor ?? Colors.black;
-
-    return Container(
-      color: bgColor,
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 30),
-                onPressed: () => Navigator.pop(context),
-              ),
-              const Text('NOW PLAYING', style: TextStyle(color: Colors.white54, letterSpacing: 1.5, fontSize: 12)),
-              const SizedBox(width: 30),
-            ],
-          ),
-          const SizedBox(height: 40),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: song.thumbnailUrl.isNotEmpty
-                ? Image.network(song.thumbnailUrl, width: 300, height: 300, fit: BoxFit.cover,
-                    errorBuilder: (c, e, s) => Container(width: 300, height: 300, color: Colors.white24, child: const Icon(Icons.music_note, size: 80)))
-                : Container(width: 300, height: 300, color: Colors.white24, child: const Icon(Icons.music_note, size: 80)),
-          ),
-          const SizedBox(height: 30),
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
-                    const SizedBox(height: 4),
-                    Text(song.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, color: Colors.white54)),
-                  ],
-                ),
-              ),
-              IconButton(
-                icon: Icon(isLiked ? Icons.favorite : Icons.favorite_border, color: isLiked ? Colors.white : Colors.white54, size: 28),
-                onPressed: () => parent._toggleLike(song),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          if (parent._isLoadingTrack)
-            const CircularProgressIndicator(color: Colors.white)
-          else if (parent._errorMessage != null)
-            Text(parent._errorMessage!, style: const TextStyle(color: Colors.redAccent, fontSize: 14)),
-          const Spacer(),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.skip_previous, color: Colors.white, size: 40),
-                onPressed: parent._queue.isNotEmpty
-                    ? () {
-                        int newIndex = (parent._queueIndex - 1) % parent._queue.length;
-                        parent._playSong(parent._queue[newIndex], newQueue: parent._queue, index: newIndex);
-                      }
-                    : null,
-              ),
-              const SizedBox(width: 30),
-              IconButton(
-                icon: Icon(parent._isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled, color: Colors.white, size: 64),
-                onPressed: () {
-                  if (parent._isPlaying) {
-                    parent._audioPlayer.pause();
-                  } else {
-                    parent._audioPlayer.play();
-                  }
-                },
-              ),
-              const SizedBox(width: 30),
-              IconButton(
-                icon: const Icon(Icons.skip_next, color: Colors.white, size: 40),
-                onPressed: parent._queue.isNotEmpty
-                    ? () {
-                        int newIndex = (parent._queueIndex + 1) % parent._queue.length;
-                        parent._playSong(parent._queue[newIndex], newQueue: parent._queue, index: newIndex);
-                      }
-                    : null,
-              ),
-            ],
-          ),
-          const SizedBox(height: 40),
-        ],
-      ),
-    );
-  }
-}
+                itemBuilder: (context, index) {
+                  return GestureDetector(
+                    onTap: () => _tapped(index),
+                    child: Container(
