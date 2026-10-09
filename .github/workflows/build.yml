@@ -1,0 +1,43 @@
+name: Build Override Music APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Generate Flutter Boilerplate (Cloud Only)
+        run: flutter create --project-name override_music --org com.alex.overridemusic .
+
+      - name: Inject Custom Code
+        run: cp custom_main.dart lib/main.dart
+
+      - name: Add Required Dependencies
+        run: |
+          flutter pub add youtube_explode_dart
+          flutter pub add just_audio
+
+      - name: Inject Android Permissions & SDK Level
+        run: |
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"/>' android/app/src/main/AndroidManifest.xml
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: override-music-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
