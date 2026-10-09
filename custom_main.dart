@@ -90,17 +90,17 @@ class _MainContainerState extends State<MainContainer> {
   String? _errorMessage;
 
   List<Song> _likedSongs = [];
+  List<Song> _recentSongs = [];
   List<Song> _searchResults = [];
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
 
-  // Highly reliable public Piped API instance endpoint
   static const String _apiBase = 'https://pipedapi.kavin.rocks';
 
   @override
   void initState() {
     super.initState();
-    _loadLikedSongs();
+    _loadData();
     _audioPlayer.playerStateStream.listen((state) {
       if (mounted) {
         setState(() {
@@ -117,21 +117,44 @@ class _MainContainerState extends State<MainContainer> {
     super.dispose();
   }
 
-  Future<void> _loadLikedSongs() async {
+  Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
+    
     final String? likedJson = prefs.getString('liked_songs');
     if (likedJson != null) {
       final List decoded = jsonDecode(likedJson);
-      setState(() {
-        _likedSongs = decoded.map((e) => Song.fromJson(e)).toList();
-      });
+      _likedSongs = decoded.map((e) => Song.fromJson(e)).toList();
     }
+
+    final String? recentJson = prefs.getString('recent_songs');
+    if (recentJson != null) {
+      final List decoded = jsonDecode(recentJson);
+      _recentSongs = decoded.map((e) => Song.fromJson(e)).toList();
+    }
+    setState(() {});
   }
 
   Future<void> _saveLikedSongs() async {
     final prefs = await SharedPreferences.getInstance();
     final String encoded = jsonEncode(_likedSongs.map((e) => e.toJson()).toList());
     await prefs.setString('liked_songs', encoded);
+  }
+
+  Future<void> _saveRecentSongs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String encoded = jsonEncode(_recentSongs.map((e) => e.toJson()).toList());
+    await prefs.setString('recent_songs', encoded);
+  }
+
+  void _addToRecents(Song song) {
+    setState(() {
+      _recentSongs.removeWhere((s) => s.videoId == song.videoId);
+      _recentSongs.insert(0, song);
+      if (_recentSongs.length > 20) {
+        _recentSongs.removeLast();
+      }
+    });
+    _saveRecentSongs();
   }
 
   bool _isLiked(Song song) {
@@ -160,16 +183,17 @@ class _MainContainerState extends State<MainContainer> {
       }
     });
 
+    _addToRecents(song);
+
     try {
       final response = await http
           .get(Uri.parse('$_apiBase/streams/${song.videoId}'))
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 6));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final audioStreams = data['audioStreams'] as List;
         
-        // Find best audio-only stream URL provided by Piped backend
         var bestStream = audioStreams.isNotEmpty ? audioStreams[0] : null;
         for (var stream in audioStreams) {
           if ((stream['bitrate'] ?? 0) > (bestStream['bitrate'] ?? 0)) {
@@ -213,7 +237,7 @@ class _MainContainerState extends State<MainContainer> {
     try {
       final response = await http
           .get(Uri.parse('$_apiBase/search?q=${Uri.encodeComponent(query)}&filter=videos'))
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 6));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -267,6 +291,7 @@ class _MainContainerState extends State<MainContainer> {
           IndexedStack(
             index: _currentIndex,
             children: [
+              HomeTab(parent: this),
               SearchTab(parent: this),
               LibraryTab(parent: this),
             ],
@@ -287,9 +312,130 @@ class _MainContainerState extends State<MainContainer> {
         unselectedItemColor: Colors.white54,
         onTap: (index) => setState(() => _currentIndex = index),
         items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(icon: Icon(Icons.search), label: 'Search'),
           BottomNavigationBarItem(icon: Icon(Icons.library_music), label: 'Library'),
         ],
+      ),
+    );
+  }
+}
+
+class HomeTab extends StatelessWidget {
+  final _MainContainerState parent;
+  const HomeTab({super.key, required this.parent});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Welcome back',
+                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.settings, color: Colors.white),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => SettingsScreen(parent: parent)),
+                    );
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Recently Played',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white70),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: parent._recentSongs.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No history yet. Search and play a track!',
+                        style: TextStyle(color: Colors.white54),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: parent._recentSongs.length,
+                      itemBuilder: (context, index) {
+                        final song = parent._recentSongs[index];
+                        return ListTile(
+                          leading: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(
+                              song.thumbnailUrl,
+                              width: 50,
+                              height: 50,
+                              fit: BoxFit.cover,
+                              errorBuilder: (c, e, s) => Container(width: 50, height: 50, color: Colors.white24),
+                            ),
+                          ),
+                          title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white)),
+                          subtitle: Text(song.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54)),
+                          onTap: () => parent._playSong(song, newQueue: parent._recentSongs, index: index),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SettingsScreen extends StatelessWidget {
+  final _MainContainerState parent;
+  const SettingsScreen({super.key, required this.parent});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Settings', style: TextStyle(color: Colors.white)),
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: ListView(
+          children: [
+            const Text('App Info', style: TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
+            const ListTile(
+              title: Text('App Name', style: TextStyle(color: Colors.white)),
+              trailing: Text('Override Music', style: TextStyle(color: Colors.white54)),
+            ),
+            const ListTile(
+              title: Text('Aesthetic', style: TextStyle(color: Colors.white)),
+              trailing: Text('Pure AMOLED Black', style: TextStyle(color: Colors.white54)),
+            ),
+            const Divider(color: Colors.white24),
+            const Text('Data & Storage', style: TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
+            ListTile(
+              title: const Text('Clear Recently Played History', style: TextStyle(color: Colors.white)),
+              trailing: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              onTap: () {
+                parent.setState(() {
+                  parent._recentSongs.clear();
+                });
+                parent._saveRecentSongs();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('History cleared')),
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -308,7 +454,7 @@ class SearchTab extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Override Music',
+              'Search',
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white),
             ),
             const SizedBox(height: 16),
