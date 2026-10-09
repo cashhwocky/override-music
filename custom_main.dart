@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,8 +19,49 @@ void main() async {
   runApp(const OverrideMusicApp());
 }
 
-class OverrideMusicApp extends StatelessWidget {
+class OverrideMusicApp extends StatefulWidget {
   const OverrideMusicApp({super.key});
+
+  @override
+  State<OverrideMusicApp> createState() => _OverrideMusicAppState();
+
+  static _OverrideMusicAppState? of(BuildContext context) =>
+      context.findAncestorStateOfType<_OverrideMusicAppState>();
+}
+
+class _OverrideMusicAppState extends State<OverrideMusicApp> {
+  String _currentThemeKey = 'black';
+
+  final Map<String, Color> themes = {
+    'black': Colors.black,
+    'indigo': Color(0xFF181C32), // Google Pixel 10 Indigo subtle tint
+    'red': Color(0xFF241212),    // Subtle Red
+    'green': Color(0xFF112214),  // Subtle Green
+    'blue': Color(0xFF111928),   // Subtle Blue
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTheme();
+  }
+
+  Future<void> _loadTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _currentThemeKey = prefs.getString('app_theme') ?? 'black';
+    });
+  }
+
+  Future<void> setTheme(String key) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('app_theme', key);
+    setState(() {
+      _currentThemeKey = key;
+    });
+  }
+
+  Color get currentBackgroundColor => themes[_currentThemeKey] ?? Colors.black;
 
   @override
   Widget build(BuildContext context) {
@@ -29,12 +71,12 @@ class OverrideMusicApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: Colors.black,
-        canvasColor: Colors.black,
-        colorScheme: const ColorScheme.dark(
+        scaffoldBackgroundColor: currentBackgroundColor,
+        canvasColor: currentBackgroundColor,
+        colorScheme: ColorScheme.dark(
           primary: Colors.white,
           secondary: Colors.white24,
-          surface: Colors.black,
+          surface: currentBackgroundColor,
         ),
       ),
       home: const MainContainer(),
@@ -47,12 +89,16 @@ class Song {
   final String title;
   final String author;
   final String thumbnailUrl;
+  final bool isLocal;
+  final String? filePath;
 
   Song({
     required this.videoId,
     required this.title,
     required this.author,
     required this.thumbnailUrl,
+    this.isLocal = false,
+    this.filePath,
   });
 
   Map<String, dynamic> toJson() => {
@@ -60,6 +106,8 @@ class Song {
         'title': title,
         'author': author,
         'thumbnailUrl': thumbnailUrl,
+        'isLocal': isLocal,
+        'filePath': filePath,
       };
 
   factory Song.fromJson(Map<String, dynamic> json) => Song(
@@ -67,6 +115,8 @@ class Song {
         title: json['title'],
         author: json['author'],
         thumbnailUrl: json['thumbnailUrl'],
+        isLocal: json['isLocal'] ?? false,
+        filePath: json['filePath'],
       );
 }
 
@@ -92,13 +142,16 @@ class _MainContainerState extends State<MainContainer> {
   List<Song> _likedSongs = [];
   List<Song> _recentSongs = [];
   List<Song> _searchResults = [];
+  List<Song> _localSongs = [];
   bool _isSearching = false;
+  bool _isScanningLocal = false;
   final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    _scanLocalFiles();
     _audioPlayer.playerStateStream.listen((state) {
       if (mounted) {
         setState(() {
@@ -144,6 +197,49 @@ class _MainContainerState extends State<MainContainer> {
     await prefs.setString('recent_songs', encoded);
   }
 
+  Future<void> _scanLocalFiles() async {
+    setState(() => _isScanningLocal = true);
+    try {
+      List<Song> foundSongs = [];
+      List<Directory> directories = [
+        Directory('/storage/emulated/0/Download'),
+        Directory('/storage/emulated/0/Music'),
+      ];
+
+      for (var dir in directories) {
+        if (await dir.exists()) {
+          try {
+            await for (var entity in dir.list(recursive: true, followLinks: false)) {
+              if (entity is File) {
+                String path = entity.path.toLowerCase();
+                if (path.endsWith('.mp3') || path.endsWith('.m4a') || path.endsWith('.wav') || path.endsWith('.aac')) {
+                  String fileName = entity.uri.pathSegments.last;
+                  foundSongs.add(Song(
+                    videoId: 'local_${path.hashCode}',
+                    title: fileName.replaceAll(RegExp(r'\.[^\\]*$'), ''),
+                    author: 'Local Device',
+                    thumbnailUrl: '',
+                    isLocal: true,
+                    filePath: entity.path,
+                  ));
+                }
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _localSongs = foundSongs;
+          _isScanningLocal = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isScanningLocal = false);
+    }
+  }
+
   void _addToRecents(Song song) {
     setState(() {
       _recentSongs.removeWhere((s) => s.videoId == song.videoId);
@@ -184,7 +280,14 @@ class _MainContainerState extends State<MainContainer> {
     _addToRecents(song);
 
     try {
-      // Direct stream resolution via robust public media gateway
+      if (song.isLocal && song.filePath != null) {
+        await _audioPlayer.setFilePath(song.filePath!);
+        await _audioPlayer.play();
+        if (mounted) setState(() => _isLoadingTrack = false);
+        return;
+      }
+
+      // InnerTune & Piped Gateway Routing
       final response = await http.get(
         Uri.parse('https://pipedapi.kavin.rocks/streams/${song.videoId}'),
       ).timeout(const Duration(seconds: 10));
@@ -246,7 +349,6 @@ class _MainContainerState extends State<MainContainer> {
 
     List<Song> results = [];
     
-    // Direct YouTube Music Web API query emulation (InnerTune approach)
     try {
       final response = await http.get(
         Uri.parse('https://pipedapi.kavin.rocks/search?q=${Uri.encodeComponent(query)}&filter=videos'),
@@ -263,14 +365,13 @@ class _MainContainerState extends State<MainContainer> {
               videoId: videoId,
               title: item['title'] ?? 'Unknown Title',
               author: item['uploaderName'] ?? 'Unknown Artist',
-              thumbnailUrl: item['thumbnail'] ?? 'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
+              thumbnailUrl: 'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
             ));
           }
         }
       }
     } catch (_) {}
 
-    // Backup web scrape fallback if primary is blocked
     if (results.isEmpty) {
       try {
         final backupRes = await http.get(
@@ -307,14 +408,16 @@ class _MainContainerState extends State<MainContainer> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.transparent,
       builder: (context) => FullPlayerSheet(parent: this),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final bgColor = OverrideMusicApp.of(context)?.currentBackgroundColor ?? Colors.black;
     return Scaffold(
+      backgroundColor: bgColor,
       body: Stack(
         children: [
           IndexedStack(
@@ -322,6 +425,7 @@ class _MainContainerState extends State<MainContainer> {
             children: [
               HomeTab(parent: this),
               SearchTab(parent: this),
+              LocalTab(parent: this),
               LibraryTab(parent: this),
             ],
           ),
@@ -336,13 +440,15 @@ class _MainContainerState extends State<MainContainer> {
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
-        backgroundColor: Colors.black,
+        backgroundColor: bgColor,
         selectedItemColor: Colors.white,
         unselectedItemColor: Colors.white54,
+        type: BottomNavigationBarType.fixed,
         onTap: (index) => setState(() => _currentIndex = index),
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(icon: Icon(Icons.search), label: 'Search'),
+          BottomNavigationBarItem(icon: Icon(Icons.folder_open), label: 'Local'),
           BottomNavigationBarItem(icon: Icon(Icons.library_music), label: 'Library'),
         ],
       ),
@@ -401,13 +507,10 @@ class HomeTab extends StatelessWidget {
                         return ListTile(
                           leading: ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: Image.network(
-                              song.thumbnailUrl,
-                              width: 50,
-                              height: 50,
-                              fit: BoxFit.cover,
-                              errorBuilder: (c, e, s) => Container(width: 50, height: 50, color: Colors.white24),
-                            ),
+                            child: song.thumbnailUrl.isNotEmpty
+                                ? Image.network(song.thumbnailUrl, width: 50, height: 50, fit: BoxFit.cover,
+                                    errorBuilder: (c, e, s) => Container(width: 50, height: 50, color: Colors.white24, child: const Icon(Icons.music_note)))
+                                : Container(width: 50, height: 50, color: Colors.white24, child: const Icon(Icons.music_note)),
                           ),
                           title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white)),
                           subtitle: Text(song.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54)),
@@ -423,30 +526,124 @@ class HomeTab extends StatelessWidget {
   }
 }
 
+class LocalTab extends StatelessWidget {
+  final _MainContainerState parent;
+  const LocalTab({super.key, required this.parent});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Local Files',
+                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh, color: Colors.white),
+                  onPressed: parent._scanLocalFiles,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: parent._isScanningLocal
+                  ? const Center(child: CircularProgressIndicator(color: Colors.white))
+                  : parent._localSongs.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'No local music files found.\nMake sure you have audio files in your Download or Music folder!',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white54),
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: parent._localSongs.length,
+                          itemBuilder: (context, index) {
+                            final song = parent._localSongs[index];
+                            return ListTile(
+                              leading: Container(
+                                width: 50,
+                                height: 50,
+                                decoration: BoxDecoration(
+                                  color: Colors.white24,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(Icons.audio_file, color: Colors.white),
+                              ),
+                              title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white)),
+                              subtitle: Text(song.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54)),
+                              onTap: () => parent._playSong(song, newQueue: parent._localSongs, index: index),
+                            );
+                          },
+                        ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class SettingsScreen extends StatelessWidget {
   final _MainContainerState parent;
   const SettingsScreen({super.key, required this.parent});
 
   @override
   Widget build(BuildContext context) {
+    final appState = OverrideMusicApp.of(context);
+    final currentKey = appState?._currentThemeKey ?? 'black';
+
     return Scaffold(
+      backgroundColor: appState?.currentBackgroundColor ?? Colors.black,
       appBar: AppBar(
         title: const Text('Settings', style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: ListView(
           children: [
+            const Text('Appearance & Themes', style: TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            ListTile(
+              title: const Text('Select Theme', style: TextStyle(color: Colors.white)),
+              subtitle: Text('Current: ${currentKey.toUpperCase()}', style: const TextStyle(color: Colors.white54)),
+              trailing: DropdownButton<String>(
+                value: currentKey,
+                dropdownColor: const Color(0xFF1E1E1E),
+                style: const TextStyle(color: Colors.white),
+                underline: const SizedBox(),
+                items: const [
+                  DropdownMenuItem(value: 'black', child: Text('Pure Black')),
+                  DropdownMenuItem(value: 'indigo', child: Text('Pixel 10 Indigo')),
+                  DropdownMenuItem(value: 'red', child: Text('Subtle Red')),
+                  DropdownMenuItem(value: 'green', child: Text('Subtle Green')),
+                  DropdownMenuItem(value: 'blue', child: Text('Subtle Blue')),
+                ],
+                onChanged: (String? val) {
+                  if (val != null) {
+                    appState?.setTheme(val);
+                  }
+                },
+              ),
+            ),
+            const Divider(color: Colors.white24),
             const Text('App Info', style: TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
             const ListTile(
               title: Text('App Name', style: TextStyle(color: Colors.white)),
               trailing: Text('Override Music', style: TextStyle(color: Colors.white54)),
             ),
             const ListTile(
-              title: Text('Aesthetic', style: TextStyle(color: Colors.white)),
-              trailing: Text('Pure AMOLED Black', style: TextStyle(color: Colors.white54)),
+              title: Text('Routing Engine', style: TextStyle(color: Colors.white)),
+              trailing: Text('Innertune / Piped API', style: TextStyle(color: Colors.white54)),
             ),
             const Divider(color: Colors.white24),
             const Text('Data & Storage', style: TextStyle(color: Colors.white54, fontSize: 14, fontWeight: FontWeight.bold)),
@@ -559,9 +756,10 @@ class LibraryTab extends StatelessWidget {
                         return ListTile(
                           leading: ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: Image.network(song.thumbnailUrl, width: 50, height: 50, fit: BoxFit.cover,
-                              errorBuilder: (c, e, s) => Container(width: 50, height: 50, color: Colors.white24),
-                            ),
+                            child: song.thumbnailUrl.isNotEmpty
+                                ? Image.network(song.thumbnailUrl, width: 50, height: 50, fit: BoxFit.cover,
+                                    errorBuilder: (c, e, s) => Container(width: 50, height: 50, color: Colors.white24))
+                                : Container(width: 50, height: 50, color: Colors.white24, child: const Icon(Icons.music_note)),
                           ),
                           title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white)),
                           subtitle: Text(song.author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54)),
@@ -601,7 +799,10 @@ class MiniPlayer extends StatelessWidget {
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.network(song.thumbnailUrl, width: 45, height: 45, fit: BoxFit.cover),
+              child: song.thumbnailUrl.isNotEmpty
+                  ? Image.network(song.thumbnailUrl, width: 45, height: 45, fit: BoxFit.cover,
+                      errorBuilder: (c, e, s) => Container(width: 45, height: 45, color: Colors.white24))
+                  : Container(width: 45, height: 45, color: Colors.white24, child: const Icon(Icons.music_note, size: 20)),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -639,9 +840,10 @@ class FullPlayerSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final song = parent._currentSong!;
     final isLiked = parent._isLiked(song);
+    final bgColor = OverrideMusicApp.of(context)?.currentBackgroundColor ?? Colors.black;
 
     return Container(
-      color: Colors.black,
+      color: bgColor,
       padding: const EdgeInsets.all(24.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -661,9 +863,10 @@ class FullPlayerSheet extends StatelessWidget {
           const SizedBox(height: 40),
           ClipRRect(
             borderRadius: BorderRadius.circular(24),
-            child: Image.network(song.thumbnailUrl, width: 300, height: 300, fit: BoxFit.cover,
-              errorBuilder: (c, e, s) => Container(width: 300, height: 300, color: Colors.white24),
-            ),
+            child: song.thumbnailUrl.isNotEmpty
+                ? Image.network(song.thumbnailUrl, width: 300, height: 300, fit: BoxFit.cover,
+                    errorBuilder: (c, e, s) => Container(width: 300, height: 300, color: Colors.white24, child: const Icon(Icons.music_note, size: 80)))
+                : Container(width: 300, height: 300, color: Colors.white24, child: const Icon(Icons.music_note, size: 80)),
           ),
           const SizedBox(height: 30),
           Row(
@@ -722,7 +925,7 @@ class FullPlayerSheet extends StatelessWidget {
                         parent._playSong(parent._queue[newIndex], newQueue: parent._queue, index: newIndex);
                       }
                     : null,
-              ),
+                ),
             ],
           ),
           const SizedBox(height: 40),
