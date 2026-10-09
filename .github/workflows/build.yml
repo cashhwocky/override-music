@@ -1,23 +1,33 @@
-name: override_music
-description: A lightweight AMOLED-optimized music app.
-publish_to: 'none'
-version: 1.0.0+1
 
-environment:
-  sdk: '>=3.0.0 <4.0.0'
+name: Build Flutter App
 
-dependencies:
-  flutter:
-    sdk: flutter
-  http: ^1.2.0
-  just_audio: ^0.9.36
-  shared_preferences: ^2.2.2
-  youtube_explode_dart: ^2.0.0
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
 
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-  flutter_lints: ^3.0.0
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
-flutter:
-  uses-material-design: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze project
+        run: flutter analyze
+
+      - name: Build APK
+        run: flutter build apk --release
