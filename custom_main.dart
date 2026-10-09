@@ -3,9 +3,9 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -81,7 +81,6 @@ class _MainContainerState extends State<MainContainer> {
   int _currentIndex = 0;
   
   final AudioPlayer _audioPlayer = AudioPlayer();
-  YoutubeExplode? _yt;
   
   Song? _currentSong;
   List<Song> _queue = [];
@@ -98,7 +97,6 @@ class _MainContainerState extends State<MainContainer> {
   @override
   void initState() {
     super.initState();
-    _yt = YoutubeExplode();
     _loadLikedSongs();
     _audioPlayer.playerStateStream.listen((state) {
       if (mounted) {
@@ -112,7 +110,6 @@ class _MainContainerState extends State<MainContainer> {
   @override
   void dispose() {
     _audioPlayer.dispose();
-    _yt?.close();
     _searchController.dispose();
     super.dispose();
   }
@@ -161,19 +158,32 @@ class _MainContainerState extends State<MainContainer> {
     });
 
     try {
-      var manifest = await _yt!.videos.streamsClient.getManifest(
-        song.videoId,
-        ytClients: [YoutubeApiClient.androidVr, YoutubeApiClient.safari],
-      );
-      var audioStream = manifest.audioOnly.withHighestBitrate();
-      
-      await _audioPlayer.setUrl(audioStream.url.toString());
-      await _audioPlayer.play();
+      // Query Invidious API instance for direct, unblocked audio stream URLs
+      final response = await http.get(Uri.parse('https://vid.puffyan.us/api/v1/videos/${song.videoId}'));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final adaptiveStreams = data['adaptiveStreams'] as List;
+        
+        var audioStream = adaptiveStreams.firstWhere(
+          (s) => s['type'].toString().contains('audio'),
+          orElse: () => adaptiveStreams.isNotEmpty ? adaptiveStreams[0] : null,
+        );
 
-      if (mounted) {
-        setState(() {
-          _isLoadingTrack = false;
-        });
+        if (audioStream == null || audioStream['url'] == null) {
+          throw Exception('Stream URL not found');
+        }
+
+        String streamUrl = audioStream['url'];
+        await _audioPlayer.setUrl(streamUrl);
+        await _audioPlayer.play();
+
+        if (mounted) {
+          setState(() {
+            _isLoadingTrack = false;
+          });
+        }
+      } else {
+        throw Exception('Failed to resolve stream');
       }
     } catch (e) {
       if (mounted) {
@@ -185,7 +195,7 @@ class _MainContainerState extends State<MainContainer> {
     }
   }
 
-  Future<void> _searchYouTube(String query) async {
+  Future<void> _searchMusic(String query) async {
     if (query.trim().isEmpty) return;
     setState(() {
       _isSearching = true;
@@ -193,21 +203,29 @@ class _MainContainerState extends State<MainContainer> {
     });
 
     try {
-      var searchList = await _yt!.search.search(query);
-      List<Song> results = [];
-      for (var video in searchList) {
-        if (video is Video) {
-          results.add(Song(
-            videoId: video.id.value,
-            title: video.title,
-            author: video.author,
-            thumbnailUrl: video.thumbnails.highResUrl,
-          ));
+      final response = await http.get(Uri.parse('https://vid.puffyan.us/api/v1/search?q=${Uri.encodeComponent(query)}&type=video'));
+      if (response.statusCode == 200) {
+        final List data = jsonDecode(response.body);
+        List<Song> results = [];
+        for (var item in data) {
+          if (item['type'] == 'video') {
+            String videoId = item['videoId'];
+            results.add(Song(
+              videoId: videoId,
+              title: item['title'] ?? 'Unknown Title',
+              author: item['author'] ?? 'Unknown Artist',
+              thumbnailUrl: 'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
+            ));
+          }
         }
-      }
-      if (mounted) {
+        if (mounted) {
+          setState(() {
+            _searchResults = results;
+            _isSearching = false;
+          });
+        }
+      } else {
         setState(() {
-          _searchResults = results;
           _isSearching = false;
         });
       }
@@ -226,9 +244,7 @@ class _MainContainerState extends State<MainContainer> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.black,
-      builder: (context) => FullPlayerSheet(
-        parent: this,
-      ),
+      builder: (context) => FullPlayerSheet(parent: this),
     );
   }
 
@@ -296,10 +312,10 @@ class SearchTab extends StatelessWidget {
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
                 suffixIcon: IconButton(
                   icon: const Icon(Icons.search, color: Colors.white),
-                  onPressed: () => parent._searchYouTube(parent._searchController.text),
+                  onPressed: () => parent._searchMusic(parent._searchController.text),
                 ),
               ),
-              onSubmitted: (val) => parent._searchYouTube(val),
+              onSubmitted: (val) => parent._searchMusic(val),
             ),
             const SizedBox(height: 16),
             Expanded(
